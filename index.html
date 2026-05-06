@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Moo Street</title>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; width: 100vw; height: 100vh; font-family: system-ui, -apple-system, sans-serif; }
+
+    #scene { position: fixed; inset: 0; width: 100%; height: 100%; }
+    #bg { width: 100%; height: 100%; object-fit: cover; object-position: center; display: block; }
+
+    /* ── Placed objects ──────────────────────────────────────────────────── */
+    .placed {
+      position: absolute;
+      width: 120px;
+      height: auto;
+      cursor: grab;
+      user-select: none;
+      touch-action: none;
+    }
+    .placed:hover,
+    .placed.gesture-hover { filter: drop-shadow(0 0 10px rgba(255,255,255,0.65)); }
+    .placed.dragging { cursor: grabbing; opacity: 0.92; z-index: 999; }
+
+    /* ── Floating notification-panel tray ───────────────────────────────── */
+    #tray {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      width: 300px;
+      max-height: min(580px, calc(100vh - 32px));
+      background: rgba(22, 22, 24, 0.8);
+      backdrop-filter: blur(36px) saturate(1.9);
+      -webkit-backdrop-filter: blur(36px) saturate(1.9);
+      border: 1px solid rgba(255,255,255,0.13);
+      border-radius: 18px;
+      box-shadow: 0 1.5px 0 rgba(255,255,255,0.07) inset, 0 28px 72px rgba(0,0,0,0.55), 0 4px 18px rgba(0,0,0,0.3);
+      padding: 14px 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      z-index: 100;
+      overflow: hidden;           /* clip children to rounded corners */
+      transform-origin: top right;
+      transition: transform 0.4s cubic-bezier(0.34, 1.28, 0.64, 1), opacity 0.28s ease;
+    }
+    #tray.hidden { transform: translateX(calc(100% + 20px)) scale(0.91); opacity: 0; pointer-events: none; }
+
+    #tray-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      padding: 0 2px;
+    }
+    #tray-title { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.4); letter-spacing: 0.06em; text-transform: uppercase; }
+    #tray-close {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: rgba(255,255,255,0.09); border: none; cursor: pointer;
+      color: rgba(255,255,255,0.55);
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s; flex-shrink: 0;
+    }
+    #tray-close:hover { background: rgba(255,255,255,0.17); color: #fff; }
+
+    #tray-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;              /* critical — allows flex child to scroll */
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+      padding-bottom: 4px;
+    }
+    #tray-grid::-webkit-scrollbar { display: none; }
+
+    .tray-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      padding: 12px 8px 10px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.055);
+      border: 1px solid rgba(255,255,255,0.08);
+      transition: background 0.15s, transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1);
+    }
+    .tray-item:hover { background: rgba(255,255,255,0.13); transform: scale(1.05); }
+    .tray-item:active { transform: scale(0.97); }
+    .tray-item.gesture-over { background: rgba(255,255,255,0.2); transform: scale(1.05); }
+    .tray-item img {
+      width: 90px; height: 90px;
+      object-fit: contain;
+      pointer-events: none;
+    }
+    .tray-item span {
+      font-size: 10px; font-weight: 500;
+      color: rgba(255,255,255,0.55); text-align: center; letter-spacing: 0.02em;
+    }
+
+    /* ── Scene props pill ────────────────────────────────────────────────── */
+    #scene-props-toggle {
+      position: fixed; top: 16px; right: 16px;
+      display: flex; align-items: center; gap: 8px;
+      cursor: pointer; z-index: 50;
+      padding: 8px 14px 8px 8px;
+      border-radius: 14px;
+      background: rgba(22,22,24,0.72);
+      backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
+      border: 1px solid rgba(255,255,255,0.11);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.32);
+      transition: opacity 0.22s, transform 0.26s cubic-bezier(0.34, 1.3, 0.64, 1), background 0.15s;
+    }
+    #scene-props-toggle:hover { background: rgba(36,36,40,0.85); }
+    #scene-props-toggle img { width: 34px; height: 34px; object-fit: contain; border-radius: 7px; }
+    #scene-props-toggle span { font-size: 12px; font-weight: 500; color: rgba(255,255,255,0.7); }
+    #scene-props-toggle.hidden { opacity: 0; pointer-events: none; transform: scale(0.85); }
+
+    /* ── Trash zone (top-right corner, always visible) ───────────────────── */
+    #trash-zone {
+      position: fixed; top: 16px; left: 16px;
+      width: 54px; height: 54px; border-radius: 14px;
+      background: rgba(22,22,24,0.65);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border: 1.5px dashed rgba(255,255,255,0.15);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+      z-index: 50; color: rgba(255,255,255,0.28);
+      font-size: 8.5px; font-family: inherit; letter-spacing: 0.02em;
+      transition: all 0.22s cubic-bezier(0.34, 1.2, 0.64, 1);
+      pointer-events: none;       /* no mouse events — hit detection done in JS */
+    }
+    /* glow when anything is being dragged */
+    #trash-zone.drag-active {
+      border-style: dashed;
+      border-color: rgba(255,255,255,0.3);
+      color: rgba(255,255,255,0.5);
+    }
+    /* full red when object hovers over it */
+    #trash-zone.drop-hover {
+      background: rgba(255,59,48,0.22);
+      border-style: solid;
+      border-color: rgba(255,59,48,0.8);
+      color: rgba(255,59,48,1);
+      transform: scale(1.12);
+    }
+
+    /* ── Export button ───────────────────────────────────────────────────── */
+    #export-btn {
+      position: fixed; bottom: 24px; left: 24px;
+      background: rgba(255,255,255,0.88); border: none;
+      padding: 9px 18px; border-radius: 8px;
+      font-size: 13px; font-weight: 500; font-family: inherit;
+      cursor: pointer; z-index: 50; letter-spacing: 0.02em;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+      transition: background 0.15s, transform 0.1s, opacity 0.2s;
+    }
+    #export-btn:hover { background: #fff; transform: translateY(-1px); }
+
+    /* ── Hand cursor dot ─────────────────────────────────────────────────── */
+    #hand-cursor {
+      position: fixed; width: 18px; height: 18px; border-radius: 50%;
+      background: #00ff88; border: 2.5px solid #fff;
+      box-shadow: 0 0 14px rgba(0,255,136,0.7);
+      pointer-events: none; z-index: 9999; display: none;
+      transform: translate(-50%, -50%);
+    }
+    #hand-cursor.pinching {
+      background: #fff; box-shadow: 0 0 18px rgba(255,255,255,0.8);
+      width: 24px; height: 24px;
+    }
+
+    /* ── Scale hint — center of composition ──────────────────────────────── */
+    #scale-hint {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(22,22,24,0.82);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 14px;
+      padding: 12px 20px;
+      font-size: 13px; font-weight: 500;
+      color: rgba(255,255,255,0.85);
+      font-family: inherit; letter-spacing: 0.02em;
+      pointer-events: none; z-index: 300;
+      opacity: 0; transition: opacity 0.3s;
+      text-align: center;
+    }
+    #scale-hint.visible { opacity: 1; }
+
+    /* ── Gesture nudge — center bottom ───────────────────────────────────── */
+    #gesture-nudge {
+      position: fixed; bottom: 28px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(22,22,24,0.72);
+      backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 20px; padding: 8px 18px;
+      font-size: 12px; color: rgba(255,255,255,0.55);
+      font-family: inherit; pointer-events: none; z-index: 50;
+      white-space: nowrap; letter-spacing: 0.02em;
+      opacity: 0; transition: opacity 0.5s;
+    }
+    #gesture-nudge.visible { opacity: 1; }
+
+    /* ── PiP camera ──────────────────────────────────────────────────────── */
+    #pip {
+      position: fixed; bottom: 24px; right: 24px;
+      width: 420px; height: 315px;
+      border-radius: 14px; overflow: hidden;
+      border: 1.5px solid rgba(255,255,255,0.2);
+      z-index: 200; background: #000;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+    }
+    #cam { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+    #landmark-canvas { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+    #cam-status {
+      position: absolute; bottom: 6px; left: 0; right: 0;
+      text-align: center; font-size: 9px; color: rgba(255,255,255,0.4);
+      font-family: inherit; pointer-events: none;
+    }
+
+    /* ── Camera enable button (shown when permission denied) ─────────────── */
+    #cam-enable {
+      position: absolute; inset: 0;
+      display: none;
+      flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(4px);
+      cursor: pointer; border: none; width: 100%; padding: 0;
+      font-family: inherit;
+    }
+    #cam-enable.visible { display: flex; }
+    #cam-enable svg { opacity: 0.7; transition: opacity 0.15s; }
+    #cam-enable:hover svg { opacity: 1; }
+    #cam-enable span {
+      font-size: 10px; font-weight: 500;
+      color: rgba(255,255,255,0.65);
+      letter-spacing: 0.03em;
+      transition: color 0.15s;
+    }
+    #cam-enable:hover span { color: #fff; }
+    /* "check settings" message that fades in when permission is hard-blocked */
+    #cam-enable .cam-hint {
+      font-size: 9px; color: rgba(255,200,100,0.8);
+      text-align: center; line-height: 1.4;
+      padding: 0 12px; display: none;
+    }
+    #cam-enable.blocked .cam-hint { display: block; }
+    #cam-enable.blocked .cam-main { display: none; }
+
+    /* ── Mobile ──────────────────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      /* Tray: full-width, slides up from bottom — clear desktop right:16px */
+      #tray {
+        top: auto; bottom: 16px;
+        right: auto; left: 50%;
+        transform: translateX(-50%);
+        width: calc(100vw - 32px); max-height: 54vh;
+        transform-origin: bottom center;
+      }
+      #tray.hidden { transform: translateX(-50%) translateY(calc(100% + 20px)) scale(0.92); opacity: 0; }
+
+      /* Props pill stays top-right (matches desktop, no change needed) */
+
+      /* PiP moves to top-left so it doesn't clash with props pill (top-right) */
+      #pip { bottom: auto; top: 16px; left: 16px; right: auto; width: 150px; height: 112px; }
+
+      /* Trash zone: bottom-right (export is bottom-left) */
+      #trash-zone { top: auto; left: auto; bottom: 24px; right: 24px; }
+
+      /* Gesture nudge: above export button */
+      #gesture-nudge { bottom: 68px; }
+
+      .placed { width: 90px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="scene">
+    <img id="bg" src="assets/bg.png" alt="" crossorigin="anonymous" />
+  </div>
+
+  <div id="tray">
+    <div id="tray-header">
+      <span id="tray-title">Props</span>
+      <button id="tray-close" aria-label="Close">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+          <path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <div id="tray-grid"></div>
+  </div>
+
+  <div id="scene-props-toggle" class="hidden">
+    <img src="assets/objects/cow-standing.png" alt="props" />
+    <span>props</span>
+  </div>
+
+  <!-- Trash zone — top-right corner like Mac bin -->
+  <div id="trash-zone">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+      <path d="M3 5h14M8 5V3.5a.5.5 0 01.5-.5h3a.5.5 0 01.5.5V5M7 8v7M10 8v7M13 8v7M4.5 5l.9 11.5a.5.5 0 00.5.5h8.2a.5.5 0 00.5-.5L15.5 5"
+        stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
+
+  <button id="export-btn">export as png</button>
+
+  <div id="hand-cursor"></div>
+  <div id="scale-hint">✌️ spread both hands to resize</div>
+  <div id="gesture-nudge">✋ pinch here · open props</div>
+
+  <div id="pip">
+    <video id="cam" autoplay muted playsinline></video>
+    <canvas id="landmark-canvas"></canvas>
+    <div id="cam-status"></div>
+    <button id="cam-enable" aria-label="Enable camera">
+      <!-- camera icon -->
+      <svg class="cam-main" width="28" height="28" viewBox="0 0 24 24" fill="none">
+        <path d="M23 7l-7 5 7 5V7z" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
+        <rect x="1" y="5" width="15" height="14" rx="2" stroke="white" stroke-width="1.5"/>
+      </svg>
+      <span class="cam-main">enable camera</span>
+      <span class="cam-hint">Permission blocked.<br/>Click the 🔒 in your address bar<br/>to allow camera access.</span>
+    </button>
+  </div>
+
+  <script type="module">
+    // ── Object list ────────────────────────────────────────────────────────────
+    const OBJECTS = [
+      { id: 'cow-party',    src: 'assets/objects/cow-party.png',    label: 'party cow'  },
+      { id: 'cow-lounge',   src: 'assets/objects/cow-lounge.png',   label: 'lounge cow' },
+      { id: 'cow-standing', src: 'assets/objects/cow-standing.png', label: 'cow'        },
+      { id: 'biplane',      src: 'assets/objects/biplane.png',      label: 'biplane'    },
+      { id: 'moo-sign',     src: 'assets/objects/moo-sign.png',     label: 'moo st.'    },
+      { id: 'tree',         src: 'assets/objects/tree.png',         label: 'tree'       },
+    ];
+
+    // ── DOM refs ───────────────────────────────────────────────────────────────
+    const scene            = document.getElementById('scene');
+    const tray             = document.getElementById('tray');
+    const trayGrid         = document.getElementById('tray-grid');
+    const trayCloseBtn     = document.getElementById('tray-close');
+    const scenePropsToggle = document.getElementById('scene-props-toggle');
+    const trashZone        = document.getElementById('trash-zone');
+    const exportBtn        = document.getElementById('export-btn');
+    const handCursor       = document.getElementById('hand-cursor');
+    const scaleHint        = document.getElementById('scale-hint');
+    const gestureNudge     = document.getElementById('gesture-nudge');
+    const pip              = document.getElementById('pip');
+    const camEl            = document.getElementById('cam');
+    const landmarkCanvas   = document.getElementById('landmark-canvas');
+    const camStatus        = document.getElementById('cam-status');
+
+    // ── Render tray ────────────────────────────────────────────────────────────
+    function renderTray() {
+      trayGrid.innerHTML = '';
+      OBJECTS.forEach(obj => {
+        const item = document.createElement('div');
+        item.className = 'tray-item';
+        item.dataset.id = obj.id;
+        item.innerHTML = `<img src="${obj.src}" crossorigin="anonymous" draggable="false"/><span>${obj.label}</span>`;
+        item.addEventListener('pointerdown', () => spawnObject(obj));
+        trayGrid.appendChild(item);
+      });
+    }
+
+    // ── Tray open / close ──────────────────────────────────────────────────────
+    let trayOpen = true;
+
+    function openTray() {
+      tray.classList.remove('hidden');
+      scenePropsToggle.classList.add('hidden');
+      trayOpen = true;
+      // On mobile, hide export while tray is up so they don't overlap
+      if (window.innerWidth <= 600) exportBtn.style.opacity = '0';
+      updateNudge();
+    }
+
+    function closeTray() {
+      tray.classList.add('hidden');
+      scenePropsToggle.classList.remove('hidden');
+      trayOpen = false;
+      if (window.innerWidth <= 600) exportBtn.style.opacity = '';
+      updateNudge();
+    }
+
+    function toggleTray() { trayOpen ? closeTray() : openTray(); }
+
+    trayCloseBtn.addEventListener('click', closeTray);
+    scenePropsToggle.addEventListener('click', openTray);
+
+    // ── Gesture nudge ──────────────────────────────────────────────────────────
+    function updateNudge() {
+      // Show when: tracking is running, tray is closed, nothing being dragged
+      const tracking = !!handLandmarker;
+      gestureNudge.classList.toggle('visible', tracking && !trayOpen && !gestureDragging);
+    }
+
+    // ── Trash zone helpers ─────────────────────────────────────────────────────
+    function trashDragStart() { trashZone.classList.add('drag-active'); }
+    function trashDragEnd()   { trashZone.classList.remove('drag-active', 'drop-hover'); }
+
+    function trashHitTest(x, y) {
+      const r = trashZone.getBoundingClientRect();
+      return x >= r.left - 8 && x <= r.right + 8 && y >= r.top - 8 && y <= r.bottom + 8;
+    }
+
+    function checkTrashHover(x, y) {
+      if (trashHitTest(x, y)) {
+        trashZone.classList.add('drop-hover');
+      } else {
+        trashZone.classList.remove('drop-hover');
+      }
+    }
+
+    // ── Pointer drag (mouse + touch) ───────────────────────────────────────────
+    let pointerDragging = null;
+
+    function spawnObject(obj) {
+      const el = document.createElement('img');
+      el.src = obj.src; el.className = 'placed'; el.crossOrigin = 'anonymous'; el.draggable = false;
+      const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+      el.style.left = (cx - 60) + 'px'; el.style.top = (cy - 60) + 'px';
+      scene.appendChild(el);
+      closeTray();
+      startPointerDrag(el, cx, cy);
+    }
+
+    function startPointerDrag(el, x, y) {
+      el.classList.add('dragging');
+      const rect = el.getBoundingClientRect();
+      pointerDragging = { el, offsetX: x - rect.left, offsetY: y - rect.top };
+      trashDragStart();
+    }
+
+    document.addEventListener('pointermove', e => {
+      if (!pointerDragging) return;
+      const r = scene.getBoundingClientRect();
+      pointerDragging.el.style.left = (e.clientX - r.left - pointerDragging.offsetX) + 'px';
+      pointerDragging.el.style.top  = (e.clientY - r.top  - pointerDragging.offsetY) + 'px';
+      checkTrashHover(e.clientX, e.clientY);
+    });
+
+    document.addEventListener('pointerup', e => {
+      if (!pointerDragging) return;
+      if (trashHitTest(e.clientX, e.clientY)) {
+        pointerDragging.el.remove();
+      } else {
+        pointerDragging.el.classList.remove('dragging');
+      }
+      pointerDragging = null;
+      trashDragEnd();
+    });
+
+    scene.addEventListener('pointerdown', e => {
+      const el = e.target.closest('.placed');
+      if (!el) return;
+      e.preventDefault();
+      startPointerDrag(el, e.clientX, e.clientY);
+    });
+
+    // ── Export ─────────────────────────────────────────────────────────────────
+    exportBtn.addEventListener('click', async () => {
+      const hide = [tray, scenePropsToggle, exportBtn, pip, handCursor, trashZone, scaleHint, gestureNudge];
+      hide.forEach(el => el.style.visibility = 'hidden');
+      try {
+        const canvas = await html2canvas(scene, { useCORS: true, allowTaint: true, scale: 2, logging: false });
+        const a = document.createElement('a');
+        a.download = 'my-scene.png'; a.href = canvas.toDataURL('image/png'); a.click();
+      } catch { alert('Export failed — serve via localhost or HTTPS.'); }
+      finally { hide.forEach(el => el.style.visibility = ''); }
+    });
+
+    // ── Camera ─────────────────────────────────────────────────────────────────
+    const camEnableBtn = document.getElementById('cam-enable');
+
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } });
+        camEl.srcObject = stream;
+        camEnableBtn.classList.remove('visible', 'blocked');
+        return true;
+      } catch (err) {
+        // NotAllowedError = user denied or dismissed; show the enable button
+        const hardBlocked = err?.name === 'NotAllowedError';
+        camEnableBtn.classList.add('visible');
+        if (hardBlocked) {
+          // Check if permission is permanently denied (not just dismissed)
+          // navigator.permissions is async and not available in all browsers, so
+          // we attempt a re-request: if it throws immediately it's hard-blocked.
+          try {
+            const perm = await navigator.permissions?.query({ name: 'camera' });
+            if (perm?.state === 'denied') camEnableBtn.classList.add('blocked');
+          } catch { /* permissions API not available — leave button in retry mode */ }
+        }
+        return false;
+      }
+    }
+
+    // Clicking the button retries getUserMedia
+    camEnableBtn.addEventListener('click', async () => {
+      camEnableBtn.classList.remove('blocked');
+      const ok = await startCamera();
+      if (ok && !handLandmarker) {
+        // Camera just came on — start tracking if video is ready
+        if (camEl.readyState >= 2) {
+          initHandTracking();
+        } else {
+          camEl.addEventListener('loadeddata', initHandTracking, { once: true });
+        }
+      }
+    });
+
+    // ── Hand tracking state ────────────────────────────────────────────────────
+    let handLandmarker = null;
+
+    // Smoothed index-finger cursor
+    let smoothX = 0, smoothY = 0;
+    const LERP = 0.28;
+
+    // Pinch thresholds (hysteresis)
+    const PINCH_ON  = 0.057;
+    const PINCH_OFF = 0.10;
+    let pinchActive    = false;
+    let pinchStartTime = 0;
+    let lastTapTime    = 0;
+
+    // Gesture drag
+    let gestureDragging = null;
+    let objInitialWidth = null;
+
+    // Two-hand scale
+    let scaleRef = null; // { dist, width } captured when second hand appears
+
+    // Gesture hover element
+    let gestureHoverEl  = null;
+    let gestureTrayItem = null; // tray item currently highlighted
+
+    async function initHandTracking() {
+      try {
+        const { HandLandmarker, FilesetResolver } = await import(
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/vision_bundle.js'
+        );
+        const vision = await FilesetResolver.forVisionTasks(
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'
+        );
+        handLandmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numHands: 2,
+        });
+        camStatus.textContent = 'tracking on';
+        setTimeout(() => { camStatus.textContent = ''; }, 2500);
+        updateNudge();
+        detectLoop();
+      } catch (e) {
+        console.warn('Hand tracking unavailable:', e);
+        camStatus.textContent = 'no tracking';
+      }
+    }
+
+    function detectLoop() {
+      if (!handLandmarker || camEl.readyState < 2) { requestAnimationFrame(detectLoop); return; }
+      const results = handLandmarker.detectForVideo(camEl, performance.now());
+      const hands = results.landmarks ?? [];
+
+      if (hands.length === 0) {
+        handCursor.style.display = 'none';
+        clearGestureHover();
+        clearGestureTrayItem();
+        onRelease();
+        scaleRef = null;
+        scaleHint.classList.remove('visible');
+      } else {
+        processPrimaryHand(hands[0]);
+        if (hands.length >= 2 && gestureDragging) {
+          processTwoHandScale(hands[0], hands[1]);
+        } else {
+          scaleRef = null;
+          if (!gestureDragging) scaleHint.classList.remove('visible');
+        }
+        drawSkeleton(hands);
+      }
+
+      requestAnimationFrame(detectLoop);
+    }
+
+    function processPrimaryHand(landmarks) {
+      const thumb = landmarks[4];
+      const index = landmarks[8];
+
+      // Smooth cursor
+      const rawX = (1 - index.x) * window.innerWidth;
+      const rawY = index.y * window.innerHeight;
+      smoothX += (rawX - smoothX) * LERP;
+      smoothY += (rawY - smoothY) * LERP;
+
+      handCursor.style.display = 'block';
+      handCursor.style.left = smoothX + 'px';
+      handCursor.style.top  = smoothY + 'px';
+
+      const dist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
+
+      // ── Pinch starts ──────────────────────────────────────────────────────
+      if (!pinchActive && dist < PINCH_ON) {
+        pinchActive    = true;
+        pinchStartTime = performance.now();
+        handCursor.classList.add('pinching');
+        clearGestureHover();
+        clearGestureTrayItem();
+
+        const hit = document.elementFromPoint(smoothX, smoothY);
+
+        // Priority order: tray items > UI buttons > placed objects > air
+        const trayItem = hit?.closest('.tray-item');
+        if (trayItem) {
+          // Gesture-drag directly from panel
+          const idx = [...trayGrid.children].indexOf(trayItem);
+          if (idx >= 0) gestureSpawnFromTray(OBJECTS[idx]);
+        } else if (hit?.closest('#scene-props-toggle')) {
+          openTray();
+        } else if (hit?.closest('#tray-close') || hit?.closest('#tray-header')) {
+          closeTray();
+        } else {
+          const placed = hit?.closest('.placed');
+          if (placed) {
+            const rect = placed.getBoundingClientRect();
+            objInitialWidth = placed.offsetWidth;
+            gestureDragging = { el: placed, offsetX: smoothX - rect.left, offsetY: smoothY - rect.top };
+            placed.classList.add('dragging');
+            trashDragStart();
+            updateNudge();
+          }
+          // else: air pinch — will be evaluated on release
+        }
+      }
+
+      // ── Pinch ends ───────────────────────────────────────────────────────
+      if (pinchActive && dist > PINCH_OFF) {
+        const duration = performance.now() - pinchStartTime;
+        // Air tap in open space → toggle tray (with debounce)
+        if (duration < 420 && !gestureDragging) {
+          const hit = document.elementFromPoint(smoothX, smoothY);
+          const isUI = hit?.closest('#scene-props-toggle, #tray-close, .tray-item, .placed');
+          if (!isUI) {
+            const now = performance.now();
+            if (now - lastTapTime > 700) { lastTapTime = now; toggleTray(); }
+          }
+        }
+        onRelease();
+        return;
+      }
+
+      // ── While pinching: drag + trash check ───────────────────────────────
+      if (pinchActive && gestureDragging) {
+        const sr = scene.getBoundingClientRect();
+        gestureDragging.el.style.left = (smoothX - sr.left - gestureDragging.offsetX) + 'px';
+        gestureDragging.el.style.top  = (smoothY - sr.top  - gestureDragging.offsetY) + 'px';
+        checkTrashHover(smoothX, smoothY);
+      }
+
+      // ── Gesture hover shadow (when not pinching) ──────────────────────────
+      if (!pinchActive) {
+        // Hover on placed objects
+        const hit = document.elementFromPoint(smoothX, smoothY);
+        const placed = hit?.closest('.placed');
+        updateGestureHover(placed ?? null);
+
+        // Hover highlight on tray items
+        const trayItem = hit?.closest('.tray-item');
+        updateGestureTrayItem(trayItem ?? null);
+      }
+    }
+
+    // ── Two-hand scale: distance between both index tips drives size ───────────
+    function processTwoHandScale(hand1, hand2) {
+      const i1x = (1 - hand1[8].x) * window.innerWidth, i1y = hand1[8].y * window.innerHeight;
+      const i2x = (1 - hand2[8].x) * window.innerWidth, i2y = hand2[8].y * window.innerHeight;
+      const dist = Math.hypot(i1x - i2x, i1y - i2y);
+
+      if (!scaleRef) {
+        scaleRef = { dist, width: gestureDragging.el.offsetWidth };
+        scaleHint.classList.add('visible');
+        setTimeout(() => scaleHint.classList.remove('visible'), 2000);
+      } else {
+        const newW = Math.min(Math.max(scaleRef.width * (dist / scaleRef.dist), 40), 500);
+        gestureDragging.el.style.width = newW + 'px';
+      }
+    }
+
+    // ── Gesture-spawn from tray panel ──────────────────────────────────────────
+    function gestureSpawnFromTray(obj) {
+      const el = document.createElement('img');
+      el.src = obj.src; el.className = 'placed'; el.crossOrigin = 'anonymous'; el.draggable = false;
+      const sr = scene.getBoundingClientRect();
+      el.style.left = (smoothX - sr.left - 60) + 'px';
+      el.style.top  = (smoothY - sr.top  - 60) + 'px';
+      el.style.width = '120px';
+      scene.appendChild(el);
+      el.classList.add('dragging');
+      objInitialWidth = 120;
+      gestureDragging = { el, offsetX: 60, offsetY: 60 };
+      closeTray();
+      trashDragStart();
+      updateNudge();
+    }
+
+    // ── Release handler ────────────────────────────────────────────────────────
+    function onRelease() {
+      if (gestureDragging) {
+        if (trashHitTest(smoothX, smoothY)) {
+          gestureDragging.el.remove();
+        } else {
+          gestureDragging.el.classList.remove('dragging');
+        }
+        gestureDragging = null;
+        trashDragEnd();
+        updateNudge();
+      }
+      pinchActive = false;
+      handCursor.classList.remove('pinching');
+      objInitialWidth = null;
+      scaleRef = null;
+    }
+
+    // ── Gesture hover state ────────────────────────────────────────────────────
+    function updateGestureHover(el) {
+      if (el === gestureHoverEl) return;
+      if (gestureHoverEl) gestureHoverEl.classList.remove('gesture-hover');
+      gestureHoverEl = el;
+      if (gestureHoverEl) gestureHoverEl.classList.add('gesture-hover');
+    }
+    function clearGestureHover() { updateGestureHover(null); }
+
+    function updateGestureTrayItem(el) {
+      if (el === gestureTrayItem) return;
+      if (gestureTrayItem) gestureTrayItem.classList.remove('gesture-over');
+      gestureTrayItem = el;
+      if (gestureTrayItem) gestureTrayItem.classList.add('gesture-over');
+    }
+    function clearGestureTrayItem() { updateGestureTrayItem(null); }
+
+    // ── Draw hand skeleton on PiP canvas ──────────────────────────────────────
+    const CONNECTIONS = [
+      [0,1],[1,2],[2,3],[3,4],
+      [0,5],[5,6],[6,7],[7,8],
+      [0,9],[9,10],[10,11],[11,12],
+      [0,13],[13,14],[14,15],[15,16],
+      [0,17],[17,18],[18,19],[19,20],
+      [5,9],[9,13],[13,17],
+    ];
+
+    function drawSkeleton(handsArr) {
+      const ctx = landmarkCanvas.getContext('2d');
+      const w = landmarkCanvas.width, h = landmarkCanvas.height;
+      ctx.clearRect(0, 0, w, h);
+      const palette = ['#00ff88', '#00aaff'];
+
+      handsArr.forEach((lms, hi) => {
+        const col = palette[hi] ?? '#00ff88';
+        const d = Math.hypot(lms[4].x - lms[8].x, lms[4].y - lms[8].y);
+        const isp = d < PINCH_ON;
+        ctx.strokeStyle = isp ? 'rgba(255,255,255,0.7)' : col + '88';
+        ctx.lineWidth = 1.4;
+        CONNECTIONS.forEach(([a,b]) => {
+          ctx.beginPath();
+          ctx.moveTo(lms[a].x*w, lms[a].y*h);
+          ctx.lineTo(lms[b].x*w, lms[b].y*h);
+          ctx.stroke();
+        });
+        lms.forEach((lm, i) => {
+          const key = i===4||i===8;
+          ctx.beginPath();
+          ctx.arc(lm.x*w, lm.y*h, key?4:2, 0, Math.PI*2);
+          ctx.fillStyle = key ? (isp?'#fff':col) : 'rgba(255,255,255,0.4)';
+          ctx.fill();
+        });
+      });
+
+      // Dashed line between index tips when two hands + dragging
+      if (handsArr.length===2 && gestureDragging) {
+        const a=handsArr[0][8], b=handsArr[1][8];
+        ctx.beginPath(); ctx.setLineDash([3,3]);
+        ctx.moveTo(a.x*w, a.y*h); ctx.lineTo(b.x*w, b.y*h);
+        ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1; ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    // ── Sync canvas to PiP size ────────────────────────────────────────────────
+    function resizeLandmarkCanvas() {
+      landmarkCanvas.width  = pip.clientWidth;
+      landmarkCanvas.height = pip.clientHeight;
+    }
+    resizeLandmarkCanvas();
+    new ResizeObserver(resizeLandmarkCanvas).observe(pip);
+
+    // ── Boot ───────────────────────────────────────────────────────────────────
+    renderTray();
+    const hasCam = await startCamera();
+    if (hasCam) camEl.addEventListener('loadeddata', initHandTracking, { once: true });
+  </script>
+</body>
+</html>
